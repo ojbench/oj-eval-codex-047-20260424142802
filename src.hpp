@@ -107,7 +107,7 @@ public:
 
 
 inline bool Controller::is_safe(const Vec &v_candidate) const {
-    // Access world via monitor (only external attributes)
+    // Mirror simulator.h collision logic as closely as possible
     int n = monitor ? monitor->get_robot_number() : 0;
     for (int j = 0; j < n; ++j) {
         if (j == id) continue;
@@ -115,32 +115,28 @@ inline bool Controller::is_safe(const Vec &v_candidate) const {
         Vec vj = monitor->get_v_cur(j);
         double rj = monitor->get_r(j);
 
-        Vec p = pos_cur - pj;          // relative position (self - other)
-        Vec u = v_candidate - vj;      // relative velocity (self - other)
-
-        double rad = r + rj - EPSILON; // strict separation with small margin
-        double rad2 = rad * rad;
-
-        // If relative velocity is ~0, just check current distance and end distance
-        double u2 = u.norm_sqr();
-        double min_d2;
-        if (u2 <= 1e-12) {
-            min_d2 = p.norm_sqr();
-        } else {
-            // time of closest approach within [0, dt]
-            double proj = -p.dot(u) / u2; // continuous time t*
-            double t_clamp = std::max(0.0, std::min(TIME_INTERVAL, proj));
-            Vec at = p + u * t_clamp;
-            min_d2 = at.norm_sqr();
+        Vec delta_pos = pos_cur - pj;
+        Vec delta_v = v_candidate - vj;
+        double project = delta_pos.dot(delta_v);
+        if (project >= 0) {
+            continue; // moving apart or stationary in separating direction
         }
-
-        if (min_d2 <= rad2) {
-            return false; // potential collision
+        double dv_norm = delta_v.norm();
+        // project is negative here; divide by -|dv|
+        project /= -dv_norm;
+        double min_dis_sqr;
+        double delta_r = r + rj;
+        if (project < dv_norm * TIME_INTERVAL) {
+            min_dis_sqr = delta_pos.norm_sqr() - project * project;
+        } else {
+            min_dis_sqr = (delta_pos + delta_v * TIME_INTERVAL).norm_sqr();
+        }
+        if (min_dis_sqr <= delta_r * delta_r - EPSILON) {
+            return false;
         }
     }
-    // Also ensure we are not overspeeding (paranoia)
-    if (v_candidate.norm_sqr() > v_max * v_max + 1e-12) return false;
-    // Avoid generating inf/nan speeds
+    // speed guard and NaN guard
+    if (v_candidate.norm_sqr() >= v_max * v_max + EPSILON) return false;
     if (!(v_candidate.x == v_candidate.x) || !(v_candidate.y == v_candidate.y)) return false;
     return true;
 }
